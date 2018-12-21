@@ -55,7 +55,7 @@ func main() {
 			return
 		}
 		func() {
-			defer queue.Forget(key)
+			defer queue.Done(key)
 			switch k := key.(type) {
 			case string:
 				p, exists, err := indexer.GetByKey(k)
@@ -63,7 +63,7 @@ func main() {
 					fmt.Println(err)
 					return
 				}
-				defer queue.Done(key)
+				defer queue.Forget(key)
 				if !exists {
 					return
 				}
