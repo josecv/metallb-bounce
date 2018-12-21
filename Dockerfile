@@ -1,2 +1,3 @@
-COPY ./metallb-bounce-sidecar .
-ENTRYPOINT ["./metallb-bounce-sidecar"]
+FROM scratch
+COPY ./metallb-bounce .
+ENTRYPOINT ["./metallb-bounce"]

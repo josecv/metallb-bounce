@@ -27,8 +27,9 @@ func main() {
 		panic(err.Error())
 	}
 	corev1Client := clientset.CoreV1()
+	fmt.Println("Starting with values: ", appLabel, namespace)
 	watcher := cache.NewListWatchFromClient(corev1Client.RESTClient(), "pods", namespace,
-		fields.OneTermEqualSelector("metadata.name", appLabel))
+		fields.Everything())
 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
 	handlers := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -46,6 +47,7 @@ func main() {
 		},
 	}
 	indexer, informer := cache.NewIndexerInformer(watcher, &v1.Pod{}, 0, handlers, cache.Indexers{})
+	fmt.Println("Starting queue")
 	go informer.Run(nil)
 	for {
 		key, quit := queue.Get()
@@ -65,7 +67,10 @@ func main() {
 				if !exists {
 					return
 				}
-				pod := p.(v1.Pod)
+				pod := p.(*v1.Pod)
+				if app, ok := pod.Labels["app"]; (!ok) || (app != appLabel) {
+					return
+				}
 				transition := transitionTime(pod)
 				if transition == nil {
 					return
@@ -73,9 +78,12 @@ func main() {
 				nodeName := pod.Spec.NodeName
 				speakerPod := getSpeakerPod(&corev1Client, nodeName)
 				if speakerPod == nil {
+					fmt.Println("No speaker")
 					return
 				}
-				if !((*transition).Before(&speakerPod.CreationTimestamp)) {
+				// There's no "AfterOrEqual" so we'll just do !Before
+				if !(speakerPod.CreationTimestamp.Before(transition)) {
+					fmt.Println("Transitioned before metallb: ", *transition, speakerPod.CreationTimestamp)
 					return
 				}
 				err = corev1Client.Pods("kube-system").Delete(speakerPod.Name, &metav1.DeleteOptions{})
@@ -91,21 +99,23 @@ func main() {
 }
 
 func getSpeakerPod(corev1Client *corev1.CoreV1Interface, nodeName string) *v1.Pod {
+	fmt.Println("Fetching speaker pod from node " + nodeName)
 	speakerPods, err := (*corev1Client).Pods("kube-system").List(metav1.ListOptions{
 		LabelSelector: "app=metallb,component=speaker",
-		FieldSelector: "spec.nodeName=" + nodeName})
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
 	if err != nil {
 		fmt.Println(err)
 		return nil
 	}
-	if speakerPods.Size() != 1 {
-		fmt.Println("wtf no speaker pod found")
+	if len(speakerPods.Items) != 1 {
+		fmt.Println("Found ", len(speakerPods.Items), " items: ", speakerPods.Items)
 		return nil
 	}
 	return &speakerPods.Items[0]
 }
 
-func transitionTime(pod v1.Pod) *metav1.Time {
+func transitionTime(pod *v1.Pod) *metav1.Time {
 	conditions := pod.Status.DeepCopy().Conditions
 	for _, condition := range conditions {
 		if condition.Type == v1.PodReady && condition.Status == v1.ConditionTrue {
